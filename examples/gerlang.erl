@@ -5,8 +5,8 @@
 -on_load(init/0).
 
 init() ->
-    ok = erlang:load_nif("./gerlang", 0).
+    ok = erlang:load_nif("../gerlang", 0).
 
 
-call(Mod, Fun, Params) when is_list(Params) ->
+call(_Mod, _Fun, Params) when is_list(Params) ->
     exit("No NIF").
