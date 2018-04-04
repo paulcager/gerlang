@@ -5,4 +5,4 @@
 
 
 simple_call() ->
-  gerlang:call('strings', 'Title', ["her royal highness"]).
+  gerlang:call('strings', 'Title', {["her royal highness"]}).
