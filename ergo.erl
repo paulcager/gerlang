@@ -5,7 +5,7 @@
 -on_load(init/0).
 
 init() ->
-    ok = erlang:load_nif("./ergo", 0).
+    ok = erlang:load_nif("./gerlang", 0).
 
 
 call(_PluginPath, _Name, Params) when is_list(Params) ->
