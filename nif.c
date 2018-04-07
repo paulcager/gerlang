@@ -80,7 +80,6 @@ call_go(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     ERL_NIF_TERM params[param_count];
     int i = 0;
     while(enif_get_list_cell(env, p_list, &(params[i]), &p_list)) {
-        printf("Param %d\n", i);
         i++;
     }
 

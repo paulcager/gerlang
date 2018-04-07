@@ -1,19 +1,23 @@
-CFLAGS=-Iinclude
+all: compile test
 
-all: nif/ergo.so nif/ergo.beam
+compile: gerlang.so ergo.beam
 
 clean:
-	rm -rf nif/ergo.so nif/gerlang.h nif/libgerlang.a nif/libgerlang.h nif/ergo.beam _obj
+	rm -rf ergo.beam erl_crash.dump gerlang.h gerlang.so examples/sample_plugin.so
 
-nif/ergo.beam: nif/ergo.erl
-	erlc -o nif/ nif/ergo.erl
+ergo.beam: ergo.erl
+	erlc -Werror -Wall ergo.erl
 
-nif/ergo.so: nif/libgerlang.a nif/ergo_nif.c nif/gerlang.h
-	cd nif && $(CC) $(CFLAGS) -o ergo.so -fpic -shared ergo_nif.c libgerlang.a
+gerlang.so: gerlang.go
+	# There must be a better way to do this! Run once to generate gerlang.h, and then again to generate
+	# gerlang.so with the C code included. I could replace the first call by a direct call of
+	# cgo, but doesn't feel like the correct solution.
+	CGO_CFLAGS_ALLOW=.* CGO_LDFLAGS_ALLOW=.* go build -buildmode=c-shared -o gerlang.so gerlang.go
+	CGO_CFLAGS_ALLOW=.* CGO_LDFLAGS_ALLOW=.* go build -buildmode=c-shared -o gerlang.so
 
-nif/libgerlang.a nif/gerlang.h: gerlang.go
-	go build -buildmode=c-archive -o nif/libgerlang.a
+test: examples/sample_plugin.so
+	#erl -eval 'ergo:call("","",[1,2,3]), init:stop()' -noinput -start_epmd false
+	cd examples && go test
 
-
-#nif/gerlang.h: gerlang.go
-#	go tool cgo --exportheader nif/gerlang.h gerlang.go
+examples/sample_plugin.so:
+	cd examples && go build -buildmode=plugin -o sample_plugin.so sample_plugin.go
