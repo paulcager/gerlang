@@ -1,4 +1,7 @@
-package runtime
+package main
+
+const ConvertStr = `
+package main
 
 import (
 	"fmt"
@@ -128,3 +131,4 @@ func getString(env *C.ErlNifEnv, term C.ERL_NIF_TERM) (string, bool) {
 
 	return "", false
 }
+`

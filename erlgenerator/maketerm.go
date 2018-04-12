@@ -1,4 +1,7 @@
-package runtime
+package main
+
+const MakeTermStr = `
+package main
 
 // #include "erl_nif.h"
 import "C"
@@ -123,3 +126,4 @@ func MakeList(env *C.ErlNifEnv, items []interface{}) C.ERL_NIF_TERM {
 	}
 	return C.enif_make_list_from_array(env, &elements[0], C.uint(len(elements)))
 }
+`
