@@ -55,14 +55,108 @@ func Convert(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
 			return fmt.Errorf("Cannot translate (%s) - expected a bool", SprintTerm(env, term))
 		}
 	case reflect.Map:
-		panic("MAP!!")
-	case reflect.Struct, reflect.Ptr, reflect.Array, reflect.Slice:
-		panic("TODO")
+		return ConvertMap(env, term, value)
+	case reflect.Array, reflect.Slice:
+		return ConvertSlice(env, term, value)
+	case reflect.Struct, reflect.Ptr:
+		panic("TODO - " + fmt.Sprintf("kind=%v, type=%T", kind, value))
 		// And all the others - Channel, Func, ... ... ...
+	case reflect.Interface:
+		// Can store anything, so try most restrictive first.
+		if l, ok := getLong(env, term); ok {
+			val.Elem().Set(reflect.ValueOf(l))
+			return nil
+		}
+		if s, ok := getString(env, term); ok {
+			val.Elem().Set(reflect.ValueOf(s))
+			return nil
+		}
+		var obj interface{}
+		if err := ConvertSlice(env, term, &obj); err == nil {
+			val.Elem().Set(reflect.ValueOf(obj))
+			return nil
+		}
+		// TODO - and all the others
+		panic("TODO - " + fmt.Sprintf("kind=%v, type=%T, term=%s", kind, value, term))
 	default:
-		fmt.Printf("Unexpected kind %d, %v", kind, val)
+		fmt.Printf("Unexpected kind %q, %v", kind, val)
 	}
 	return nil
+}
+
+func ConvertSlice(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
+	// TODO - special case when expecting []byte: allow binaries and lists.
+
+	v := reflect.ValueOf(value)
+	fmt.Printf("value is type %T, value %v, v is %v\n", value, value, v.Type())
+	var length C.unsigned
+	if C.enif_get_list_length(env, term, &length) != 0 {
+		var head, tail C.ERL_NIF_TERM
+		// TODO - don't do for array.
+		slice := reflect.MakeSlice(v.Elem().Type(), int(length), int(length))
+		v.Elem().Set(slice)
+		i := 0
+		head = term
+		for C.enif_get_list_cell(env, head, &head, &tail) != 0 {
+			var item interface{}
+			err := Convert(env, head, &item)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Setting index %d in slice of len %d to %v\n", i, int(length), item)
+			slice.Index(i).Set(reflect.ValueOf(item))
+			i++
+			head = tail
+		}
+
+		return nil
+	}
+
+	var arity C.int
+	var array *C.ERL_NIF_TERM
+	if C.enif_get_tuple(env, term, &arity, &array) != 0 {
+		// TODO - don't do for array.
+		slice := reflect.MakeSlice(v.Elem().Type(), int(arity), int(arity))
+		v.Elem().Set(slice)
+		for i := 0; i < int(arity); i++ {
+			var item interface{}
+			err := Convert(env, *array, &item)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Setting index %d in tuple of len %d to %v\n", i, int(arity), item)
+			slice.Index(i).Set(reflect.ValueOf(item))
+			array = (*C.ERL_NIF_TERM)(unsafe.Pointer(uintptr(unsafe.Pointer(array)) + 8))
+		}
+
+		return nil
+	}
+
+	// TODO - try tuple.
+
+	return fmt.Errorf("Cannot translate (%s) - expected a slice/array", SprintTerm(env, term))
+}
+
+func ConvertMap(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
+	// Can be represented as either a map (http://erlang.org/doc/man/maps.html),
+	// or as a proplist (http://erlang.org/doc/man/proplists.html).
+
+	var k, v C.ERL_NIF_TERM
+	var iter C.ErlNifMapIterator
+
+	if C.enif_map_iterator_create(env, term, &iter, C.ERL_NIF_MAP_ITERATOR_FIRST) != 0 {
+		// Is a map
+		defer C.enif_map_iterator_destroy(env, &iter)
+
+		for C.enif_map_iterator_get_pair(env, &iter, &k, &v) != 0 {
+			fmt.Println("k", k, "v", v)
+			C.enif_map_iterator_next(env, &iter)
+		}
+
+		return nil
+	}
+
+	panic("TODO")
 }
 
 func SprintTerm(env *C.ErlNifEnv, term C.ERL_NIF_TERM) string {
