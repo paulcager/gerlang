@@ -12,6 +12,8 @@ import (
 
 	"bytes"
 
+	"os/exec"
+
 	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/imports"
 )
@@ -19,11 +21,8 @@ import (
 //go:generate bash -c "(echo package main; echo; echo 'const ConvertStr = `'; sed 1s/runtime/main/ ../runtime/convert.go; echo '`') >convert.go"
 //go:generate bash -c "(echo package main; echo; echo 'const MakeTermStr = `'; sed 1s/runtime/main/ ../runtime/maketerm.go; echo '`') >maketerm.go"
 
-const outDir = "out" // TODO cmd-line arg
-
 var (
-	conf    = loader.Config{}
-	verbose = true
+	conf = loader.Config{}
 )
 
 type FuncDecl struct {
@@ -71,7 +70,8 @@ func (f *FuncDecl) PrintGlue(w io.Writer) {
 	}
 	for i := 0; i < params.Len(); i++ {
 		param := params.At(i)
-		fmt.Fprintf(w, "\tvar %s %s\n", param.Name(), param.Type().String())
+		typ := types.TypeString(param.Type(), typeQualifier)
+		fmt.Fprintf(w, "\tvar %s %s\n", param.Name(), typ)
 	}
 	for i := 0; i < params.Len(); i++ {
 		param := params.At(i)
@@ -116,13 +116,15 @@ func (f *FuncDecl) PrintGlue(w io.Writer) {
 	fmt.Fprintf(w, "\treturn MakeReturnValue(env, _results)")
 }
 
+func typeQualifier(p *types.Package) string {
+	return p.Name()
+}
+
 func isErrorType(v *types.Var) bool {
 	return v.Type().String() == "error" // TODO - doesn't cover cases where returns MyStructThatImplementsError
 }
 
 func main() {
-	pkgNames := os.Args[1:] // TODO - have proper cmd-line processing.
-	pkgNames = []string{"fmt", "os"}
 	conf.FromArgs(pkgNames, false)
 	prog, err := conf.Load()
 	if err != nil {
@@ -161,6 +163,23 @@ func main() {
 	generateErl(decls)
 	generateGlue(decls)
 	generateC(decls)
+
+	err = os.Chdir(outDir)
+	if err != nil {
+		fail("Could not chdir %q: %s", outDir, err)
+	}
+
+	os.Setenv("CGO_LDFLAGS_ALLOW", ".*")
+
+	output, err := exec.Command("go", "build", "-o", "ergo.so", "-buildmode", "c-shared").CombinedOutput()
+	if err != nil {
+		fail("Could not compile generated package %q: %s\n%s", outDir, err, output)
+	}
+
+	output, err = exec.Command("erlc", "ergo.erl").CombinedOutput()
+	if err != nil {
+		fail("Could not compile ergo.erl: %s\n%s", err, output)
+	}
 }
 
 func generateErl(decls []*FuncDecl) {
