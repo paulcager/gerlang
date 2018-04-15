@@ -45,11 +45,18 @@ func MakeTerm(env *C.ErlNifEnv, value interface{}) C.ERL_NIF_TERM {
 		}
 		return MakeAtom(env, "false")
 	case reflect.Map:
-		keyType := v.Type().Key()
-		valueType := v.Type().Elem()
+		m := C.enif_make_new_map(env)
 		keys := v.MapKeys()
-		_, _, _ = keyType, valueType, keys
-		panic("TODO")
+
+		for _, key := range keys {
+			newKey := MakeTerm(env, key.Interface())
+			newValue := MakeTerm(env, v.MapIndex(key).Interface())
+			if C.enif_make_map_put(env, m, newKey, newValue, &m) == 0 {
+				return MakeError(env, "Could not enif_make_map_put")
+			}
+		}
+
+		return m
 	case reflect.Slice, reflect.Array:
 		sLen := v.Len()
 		elements := make([]interface{}, sLen)

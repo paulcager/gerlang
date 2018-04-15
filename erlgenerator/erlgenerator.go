@@ -1,16 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"go/types"
 	"io"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"unicode"
 	"unicode/utf8"
 
-	"bytes"
+	"go/token"
 
 	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/imports"
@@ -19,18 +21,22 @@ import (
 //go:generate bash -c "(echo package main; echo; echo 'const ConvertStr = `'; sed 1s/runtime/main/ ../runtime/convert.go; echo '`') >convert.go"
 //go:generate bash -c "(echo package main; echo; echo 'const MakeTermStr = `'; sed 1s/runtime/main/ ../runtime/maketerm.go; echo '`') >maketerm.go"
 
-const outDir = "out" // TODO cmd-line arg
-
 var (
-	conf    = loader.Config{}
-	verbose = true
+	conf = loader.Config{}
 )
 
 type FuncDecl struct {
-	name string
-	*types.Signature
-	pkg *loader.PackageInfo
+	pkg      *loader.PackageInfo
+	position string
+	name     string
+	//*types.Signature
+	receiver *types.Var
+	params   []*types.Var
+	results  []*types.Var
+	variadic bool
 }
+
+// TODO - sort out the awful replication of the receiver test.
 
 func GoToErl(pkg, name string) string {
 	ch, size := utf8.DecodeRune([]byte(name))
@@ -45,14 +51,25 @@ func GoToGlue(pkg, name string) string {
 
 func (f *FuncDecl) PrintErl(w io.Writer) {
 	// TODO - include types such as `when is_list(A)` and ideally typespecs.
+	recv := f.receiver
 	name := GoToErl(f.pkg.Pkg.Name(), f.name)
+	if f.receiver != nil {
+		t := recv.Type()
+		ptr, ok := t.(*types.Pointer)
+		for ok {
+			t = ptr.Elem()
+			ptr, ok = t.(*types.Pointer)
+		}
+
+		name = GoToErl(f.pkg.Pkg.Name(), t.(*types.Named).Obj().Name()+"_"+name)
+	}
+
 	fmt.Fprintf(w, "%s(", name)
 
-	for i := 0; i < f.Params().Len(); i++ {
-		v := f.Params().At(i)
+	for i, v := range f.params {
 		paramName := "_" + v.Name()
 		fmt.Fprint(w, paramName)
-		if i < f.Params().Len()-1 {
+		if i < len(f.params)-1 {
 			fmt.Fprint(w, ", ")
 		}
 	}
@@ -60,29 +77,50 @@ func (f *FuncDecl) PrintErl(w io.Writer) {
 }
 
 func (f *FuncDecl) PrintGlue(w io.Writer) {
+	params := f.params
+	results := f.results
+	recv := f.receiver
 	glueName := GoToGlue(f.pkg.Pkg.Name(), f.name)
-	results := f.Results()
-	params := f.Params()
+	if recv != nil {
+		t := recv.Type()
+		ptr, ok := t.(*types.Pointer)
+		for ok {
+			t = ptr.Elem()
+			ptr, ok = t.(*types.Pointer)
+		}
+
+		glueName = GoToGlue(f.pkg.Pkg.Name(), t.(*types.Named).Obj().Name()+"_"+f.name)
+	}
+
 	fmt.Fprintf(w, "//export %s\n", glueName)
 	fmt.Fprintf(w, "func %s(env *C.ErlNifEnv, argc C.int, __argv *C.ERL_NIF_TERM) C.ERL_NIF_TERM {\n", glueName)
+	fmt.Fprintf(w, "// %s\n", f.position)
 	defer fmt.Fprintf(w, "}\n")
-	if params.Len() > 0 {
+	if len(params) > 0 || recv != nil {
 		fmt.Fprintf(w, "\tvar __err error\n")
 	}
-	for i := 0; i < params.Len(); i++ {
-		param := params.At(i)
-		fmt.Fprintf(w, "\tvar %s %s\n", param.Name(), param.Type().String())
+	if recv != nil {
+		typ := types.TypeString(recv.Type(), typeQualifier)
+		fmt.Fprintf(w, "\tvar %s %s\n", recv.Name(), typ)
 	}
-	for i := 0; i < params.Len(); i++ {
-		param := params.At(i)
+	for i := range params {
+		param := params[i]
+		typ := types.TypeString(param.Type(), typeQualifier)
+		fmt.Fprintf(w, "\tvar %s %s\n", param.Name(), typ)
+	}
+	if recv != nil {
+		fmt.Fprintf(w, "\tif __err = Convert(env, *__argv, &%s); __err != nil { return MakeError(env, __err.Error()) }\n", recv.Name())
+	}
+	for i := range params {
+		param := params[i]
 		fmt.Fprintf(w, "\tif __err = Convert(env, *__argv, &%s); __err != nil { return MakeError(env, __err.Error()) }\n", param.Name())
 		fmt.Fprintf(w, "__argv = (*C.ERL_NIF_TERM)(unsafe.Pointer(8 + uintptr(unsafe.Pointer(__argv))))\n")
 	}
 
 	fmt.Fprintf(w, "\t")
-	if f.Results().Len() > 0 {
-		fmt.Fprintf(w, "_results := make([]interface{}, %d)\n\t", f.Results().Len())
-		for i := 0; i < f.Results().Len(); i++ {
+	if len(results) > 0 {
+		fmt.Fprintf(w, "_results := make([]interface{}, %d)\n\t", len(results))
+		for i := range results {
 			if i > 0 {
 				fmt.Fprint(w, ", ")
 			}
@@ -90,30 +128,38 @@ func (f *FuncDecl) PrintGlue(w io.Writer) {
 		}
 		fmt.Fprintf(w, " = ")
 	}
-	fmt.Fprintf(w, "%s.%s(", f.pkg.Pkg.Name(), f.name)
-	for i := 0; i < params.Len(); i++ {
-		param := params.At(i)
+	if recv == nil {
+		fmt.Fprintf(w, "%s.%s(", f.pkg.Pkg.Name(), f.name)
+	} else {
+		fmt.Fprintf(w, "%s.%s(", recv.Name(), f.name)
+	}
+	for i := range params {
+		param := params[i]
 		if i > 0 {
 			fmt.Fprint(w, ", ")
 		}
 		fmt.Fprintf(w, "%s", param.Name())
 	}
-	if f.Variadic() {
+	if f.variadic {
 		fmt.Fprintf(w, "...")
 	}
 	fmt.Fprintf(w, ")\n")
 
-	if results.Len() == 0 {
+	if len(results) == 0 {
 		fmt.Fprintf(w, "\treturn MakeAtom(env, \"ok\")\n")
 		return
 	}
 
-	if isErrorType(results.At(results.Len() - 1)) {
+	if isErrorType(results[len(results)-1]) {
 		// If an error was returned, return {'error', err.Error()}.
 		// Otherwise (the error was nil), exclude the nil from the return values.
-		fmt.Fprintf(w, "\tif err, ok := _results[%d].(error); ok && err != nil { return MakeError(env, err.Error()) } else { _results = _results[:len(_results)-2] }\n", results.Len()-1)
+		fmt.Fprintf(w, "\tif err, ok := _results[%d].(error); ok && err != nil { return MakeError(env, err.Error()) } else { _results = _results[:len(_results)-2] }\n", len(results)-1)
 	}
 	fmt.Fprintf(w, "\treturn MakeReturnValue(env, _results)")
+}
+
+func typeQualifier(p *types.Package) string {
+	return p.Name()
 }
 
 func isErrorType(v *types.Var) bool {
@@ -121,8 +167,6 @@ func isErrorType(v *types.Var) bool {
 }
 
 func main() {
-	pkgNames := os.Args[1:] // TODO - have proper cmd-line processing.
-	pkgNames = []string{"fmt", "os"}
 	conf.FromArgs(pkgNames, false)
 	prog, err := conf.Load()
 	if err != nil {
@@ -135,32 +179,109 @@ func main() {
 		fmt.Println("Processing package", name)
 		pkgScope := pkg.Pkg.Scope()
 		items := pkgScope.Names()
+
 		for _, name := range items {
 			obj := pkgScope.Lookup(name)
 			if obj == nil || !obj.Exported() {
 				continue
 			}
-			switch t := obj.Type().(type) {
-			case *types.Signature:
+
+			switch obj := obj.(type) {
+			case *types.Func:
+				t := obj.Type().(*types.Signature)
 				if verbose {
 					fmt.Println("  Processing", name, conf.Fset.Position(obj.Pos()), " -- ", t)
 				}
-				decl := &FuncDecl{
-					name:      name,
-					pkg:       pkg,
-					Signature: t,
-				}
+				decl := createDecl(conf.Fset.Position(obj.Pos()), name, pkg, t)
 				decls = append(decls, decl)
+			case *types.TypeName:
+				t := obj.Type().(*types.Named)
+				if verbose {
+					fmt.Println("  Processing", name, conf.Fset.Position(obj.Pos()), " -- ", t)
+				}
+				for i := 0; i < t.NumMethods(); i++ {
+					meth := t.Method(i)
+					if meth.Exported() {
+						decl := createDecl(conf.Fset.Position(meth.Pos()), meth.Name(), pkg, meth.Type().(*types.Signature))
+						decls = append(decls, decl)
+					}
+				}
+			//case *types.Named:
+			//	fmt.Printf("Name %s is a %T\n", name, obj)
+			//	mset := types.NewMethodSet(t)
+			//	for i := 0; i < mset.Len(); i++ {
+			//		meth := mset.At(i).Obj().(*types.Func)
+			//		if !meth.Exported() {
+			//			continue
+			//		}
+			//		fmt.Println(name, meth.Name(), meth.Type(), meth.FullName())
+			//		decl := &FuncDecl{
+			//			position:  conf.Fset.Position(obj.Pos()).String(),
+			//			name:      meth.Name(),
+			//			pkg:       pkg,
+			//			Signature: meth.Type().(*types.Signature),
+			//		}
+			//		decls = append(decls, decl)
+			//		_ = decl
+			//	}
+
 			default:
 				// For now don't process any other definition (such as a var).
 			}
 		}
 	}
 
+	// TODO - should I just check `file erl`?
+	nifDir, _ := filepath.Abs("nif")
+
 	os.MkdirAll(outDir, 0755)
 	generateErl(decls)
 	generateGlue(decls)
 	generateC(decls)
+
+	err = os.Chdir(outDir)
+	if err != nil {
+		fail("Could not chdir %q: %s", outDir, err)
+	}
+
+	if verbose {
+		fmt.Printf("Nif directory is %s\n", nifDir)
+	}
+
+	os.Setenv("CGO_LDFLAGS_ALLOW", ".*")
+	os.Setenv("C_INCLUDE_PATH", nifDir+"/include")
+	os.Setenv("LIBRARY_PATH", nifDir+"/lib")
+
+	output, err := exec.Command("go", "build", "-o", "ergo.so", "-buildmode", "c-shared").CombinedOutput()
+	if err != nil {
+		fail("Could not compile generated package %q: %s\n%s", outDir, err, output)
+	}
+
+	output, err = exec.Command("erlc", "ergo.erl").CombinedOutput()
+	if err != nil {
+		fail("Could not compile ergo.erl: %s\n%s", err, output)
+	}
+}
+
+func createDecl(pos token.Position, name string, pkg *loader.PackageInfo, sig *types.Signature) *FuncDecl {
+	var params, results []*types.Var
+
+	for i := 0; i < sig.Params().Len(); i++ {
+		params = append(params, sig.Params().At(i))
+	}
+	for i := 0; i < sig.Results().Len(); i++ {
+		results = append(results, sig.Results().At(i))
+	}
+
+	return &FuncDecl{
+		position: pos.String(),
+		name:     name,
+		pkg:      pkg,
+		variadic: sig.Variadic(),
+		params:   params,
+		results:  results,
+		receiver: sig.Recv(),
+	}
 }
 
 func generateErl(decls []*FuncDecl) {
@@ -196,6 +317,8 @@ func main() {}
 	glueCode := out.Bytes()
 	if b, err := imports.Process("ergo.go", glueCode, nil); err == nil {
 		glueCode = b
+	} else {
+		fmt.Fprintf(os.Stderr, "Imports failed [%T]: %s", err, err)
 	}
 
 	glueOut, err := os.Create(filepath.Join(outDir, "ergo.go"))
@@ -219,15 +342,48 @@ func generateC(decls []*FuncDecl) {
 
 	out.Write([]byte("#include \"erl_nif.h\"\n\n"))
 	for _, decl := range decls {
+		recv := decl.receiver
 		glueName := GoToGlue(decl.pkg.Pkg.Name(), decl.name)
+		if recv != nil {
+			t := recv.Type()
+			ptr, ok := t.(*types.Pointer)
+			for ok {
+				t = ptr.Elem()
+				ptr, ok = t.(*types.Pointer)
+			}
+
+			glueName = GoToGlue(decl.pkg.Pkg.Name(), t.(*types.Named).Obj().Name()+"_"+decl.name)
+		}
 		fmt.Fprintf(out, "extern ERL_NIF_TERM %s(ErlNifEnv* p0, int p1, const ERL_NIF_TERM* p2);\n", glueName)
 	}
 
 	fmt.Fprintf(out, "\nstatic ErlNifFunc nif_funcs[] = {\n")
 	for _, decl := range decls {
+		recv := decl.receiver
 		glueName := GoToGlue(decl.pkg.Pkg.Name(), decl.name)
+		if recv != nil {
+			t := recv.Type()
+			ptr, ok := t.(*types.Pointer)
+			for ok {
+				t = ptr.Elem()
+				ptr, ok = t.(*types.Pointer)
+			}
+
+			glueName = GoToGlue(decl.pkg.Pkg.Name(), t.(*types.Named).Obj().Name()+"_"+decl.name)
+		}
 		erlName := GoToErl(decl.pkg.Pkg.Name(), decl.name)
-		fmt.Fprintf(out, "\t{\"%s\", %d, %s},\n", erlName, decl.Params().Len(), glueName)
+		if decl.receiver != nil {
+			t := recv.Type()
+			ptr, ok := t.(*types.Pointer)
+			for ok {
+				t = ptr.Elem()
+				ptr, ok = t.(*types.Pointer)
+			}
+
+			erlName = GoToErl(decl.pkg.Pkg.Name(), t.(*types.Named).Obj().Name()+"_"+erlName)
+		}
+
+		fmt.Fprintf(out, "\t{\"%s\", %d, %s},\n", erlName, len(decl.params), glueName)
 	}
 	fmt.Fprintf(out, "};\n\nERL_NIF_INIT(ergo, nif_funcs, NULL, NULL, NULL, NULL);\n")
 }
