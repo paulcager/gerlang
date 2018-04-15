@@ -13,6 +13,10 @@ type Struct struct {
 	}
 }
 
-func TestStruct(s *Struct) string {
+func TestStruct(s Struct) string {
 	return fmt.Sprintf("%v", s)
+}
+
+func TestMap(m map[string]interface{}) string {
+	return fmt.Sprintf("%v", m)
 }
