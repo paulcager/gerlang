@@ -21,6 +21,9 @@ import "C"
 
 func Convert(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
 	//fmt.Printf("Convert %s into %T [%+v]\n", SprintTerm(env, term), value, value)
+	if _, ok := value.(reflect.Value); ok {
+		panic("Probable coding error")
+	}
 	val := reflect.ValueOf(value)
 	if !val.Elem().CanSet() {
 		return fmt.Errorf("Cannot translate %v because %v is not settable", term, val)
@@ -118,7 +121,7 @@ func ConvertSlice(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) erro
 			if err != nil {
 				return err
 			}
-			slice.Index(i).Set(reflect.ValueOf(item))
+			slice.Index(i).Set(reflect.ValueOf(item).Convert(slice.Index(i).Type()))
 			i++
 			head = tail
 		}
@@ -184,7 +187,66 @@ func ConvertMap(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error 
 }
 
 func ConvertStruct(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
-	panic("TODO")
+	v := reflect.ValueOf(value)
+	// Accept a Map<FieldName>FieldValue; a tuple; or a list
+	var iter C.ErlNifMapIterator
+	if C.enif_map_iterator_create(env, term, &iter, C.ERL_NIF_MAP_ITERATOR_FIRST) != 0 {
+		defer C.enif_map_iterator_destroy(env, &iter)
+		var kTerm, vTerm C.ERL_NIF_TERM
+		for C.enif_map_iterator_get_pair(env, &iter, &kTerm, &vTerm) != 0 {
+			var fieldName string
+			if err := Convert(env, kTerm, &fieldName); err != nil {
+				return err
+			}
+			field := v.Elem().FieldByName(fieldName)
+			//fmt.Printf("field: %T %v\n", field, field.Interface())
+			if !field.IsValid() {
+				// Could just ignore, but more likely it is an error.
+				return fmt.Errorf("No field named %q", fieldName)
+			}
+			fieldValue := reflect.New(field.Type())
+			//fmt.Printf("fieldValue: %T %v\n", fieldValue.Interface(), fieldValue.Interface())
+			if err := Convert(env, vTerm, fieldValue.Interface()); err != nil {
+				return err
+			}
+			field.Set(fieldValue.Elem())
+			C.enif_map_iterator_next(env, &iter)
+		}
+
+		return nil
+	}
+
+	var listLen C.unsigned
+	var list []C.ERL_NIF_TERM
+	if C.enif_get_list_length(env, term, &listLen) != 0 {
+		var head, tail C.ERL_NIF_TERM
+		head = term
+		for C.enif_get_list_cell(env, head, &head, &tail) != 0 {
+			list = append(list, head)
+			head = tail
+		}
+	} else {
+		var arity C.int
+		var array *C.ERL_NIF_TERM
+		if C.enif_get_tuple(env, term, &arity, &array) != 0 {
+			for i := 0; i < int(arity); i++ {
+				list = append(list, *array)
+				array = (*C.ERL_NIF_TERM)(unsafe.Pointer(uintptr(unsafe.Pointer(array)) + 8))
+			}
+		} else {
+			return fmt.Errorf("Expected map, struct or list to decode into struct")
+		}
+	}
+
+	for i := range list {
+		field := reflect.New(v.Elem().Field(i).Type())
+		if err := Convert(env, list[i], field.Interface()); err != nil {
+			return err
+		}
+		v.Elem().Field(i).Set(field.Elem())
+	}
+
+	return nil
 }
 
 func SprintTerm(env *C.ErlNifEnv, term C.ERL_NIF_TERM) string {

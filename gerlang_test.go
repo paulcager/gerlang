@@ -56,9 +56,13 @@ func TestGenerateStruct(t *testing.T) {
 	//defer os.RemoveAll(tmp)
 	fmt.Println(tmp)
 
-	b, err := runErl(tmp, `ergo:testing_testStruct({"Hi", 1,2,{"GG"}})`)
+	b, err := runErl(tmp, `ergo:testing_testStruct(#{"S" => "Str", "I64" => 22, "Sub" => { "AA" }})`)
 	require.NoError(t, err, "Command output: %s", b)
-	assert.Equal(t, "?", string(b))
+	assert.Equal(t, "{Str 22 0 {[65 65]}}", string(b))
+
+	b, err = runErl(tmp, `ergo:testing_testStruct({"Hi", 1,2,{[7, 8]}})`)
+	require.NoError(t, err, "Command output: %s", b)
+	assert.Equal(t, "{Hi 1 2 {[7 8]}}", string(b))
 }
 
 func TestGenerateMap(t *testing.T) {
