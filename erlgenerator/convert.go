@@ -44,7 +44,13 @@ func Convert(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
 		if l, ok := getLong(env, term); ok {
 			val.Elem().SetUint(uint64(l))
 		} else {
-			return fmt.Errorf("Cannot translate (%s) - expected an int", SprintTerm(env, term))
+			return fmt.Errorf("Cannot translate (%s) - expected a uint", SprintTerm(env, term))
+		}
+	case reflect.Float32, reflect.Float64:
+		if d, ok := getDouble(env, term); ok {
+			val.Elem().SetFloat(d)
+		} else {
+			return fmt.Errorf("Cannot translate (%s) - expected a float", SprintTerm(env, term))
 		}
 	case reflect.String:
 		if s, ok := getString(env, term); ok {
@@ -103,7 +109,16 @@ func Convert(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
 }
 
 func ConvertSlice(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
-	// TODO - special case when expecting []byte: allow binaries and lists.
+	// Special case when expecting []byte: allow binaries.
+	if b, ok := value.(*[]byte); ok {
+		var bin C.ErlNifBinary
+		if C.enif_inspect_binary(env, term, &bin) != 0 {
+			size := C.int(bin.size)
+			data := C.GoBytes(unsafe.Pointer(bin.data), size)
+			*b = data
+			return nil
+		}
+	}
 
 	v := reflect.ValueOf(value)
 	if v.Elem().Type().Kind() != reflect.Slice {
@@ -150,8 +165,6 @@ func ConvertSlice(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) erro
 
 		return nil
 	}
-
-	// TODO - try tuple.
 
 	return fmt.Errorf("Cannot translate (%s) - expected a slice/array", SprintTerm(env, term))
 }
@@ -272,6 +285,16 @@ func getLong(env *C.ErlNifEnv, term C.ERL_NIF_TERM) (int64, bool) {
 	var cl C.long
 	ok := C.enif_get_int64(env, term, &cl) != 0
 	return int64(cl), ok
+}
+
+func getDouble(env *C.ErlNifEnv, term C.ERL_NIF_TERM) (float64, bool) {
+	var d C.double
+	ok := C.enif_get_double(env, term, &d) != 0
+	if ok {
+		return float64(d), ok
+	}
+	l, ok := getLong(env, term)
+	return float64(l), ok
 }
 
 func getBool(env *C.ErlNifEnv, term C.ERL_NIF_TERM) (bool, bool) {

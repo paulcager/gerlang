@@ -1,6 +1,7 @@
 package testing
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -13,10 +14,22 @@ type Struct struct {
 	}
 }
 
+func TestBasic(i int, i32 int32, ui uint64, b bool, f float64, by byte, s string, bs []byte) string {
+	return fmt.Sprint(i, i32, ui, b, f, by, " ", s, " ", bs)
+}
+
 func TestStruct(s Struct) string {
 	return fmt.Sprintf("%v", s)
 }
 
 func TestMap(m map[string]interface{}) string {
 	return fmt.Sprintf("%v", m)
+}
+
+func TestReturnMultiple(returnError bool) (Struct, string, error) {
+	if returnError {
+		return Struct{}, "", errors.New("returnedError")
+	}
+
+	return Struct{S: "str", I64: 123, I: 456, Sub: struct{ B []byte }{B: []byte{4, 5}}}, "ok", nil
 }
