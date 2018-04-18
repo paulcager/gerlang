@@ -35,31 +35,31 @@ func Convert(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
 		if l, ok := getLong(env, term); ok {
 			val.Elem().SetInt(int64(l))
 		} else {
-			return fmt.Errorf("Cannot translate (%s) - expected an int", SprintTerm(env, term))
+			return fmt.Errorf("Cannot translate %#q - expected an int", SprintTerm(env, term))
 		}
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		if l, ok := getLong(env, term); ok {
 			val.Elem().SetUint(uint64(l))
 		} else {
-			return fmt.Errorf("Cannot translate (%s) - expected a uint", SprintTerm(env, term))
+			return fmt.Errorf("Cannot translate %#q - expected a uint", SprintTerm(env, term))
 		}
 	case reflect.Float32, reflect.Float64:
 		if d, ok := getDouble(env, term); ok {
 			val.Elem().SetFloat(d)
 		} else {
-			return fmt.Errorf("Cannot translate (%s) - expected a float", SprintTerm(env, term))
+			return fmt.Errorf("Cannot translate %#q - expected a float", SprintTerm(env, term))
 		}
 	case reflect.String:
 		if s, ok := getString(env, term); ok {
 			val.Elem().SetString(s)
 		} else {
-			return fmt.Errorf("Cannot translate (%s) - expected a string", SprintTerm(env, term))
+			return fmt.Errorf("Cannot translate %#q - expected a string", SprintTerm(env, term))
 		}
 	case reflect.Bool:
 		if b, ok := getBool(env, term); ok {
 			val.Elem().SetBool(b)
 		} else {
-			return fmt.Errorf("Cannot translate (%s) - expected a bool", SprintTerm(env, term))
+			return fmt.Errorf("Cannot translate %#q - expected a bool", SprintTerm(env, term))
 		}
 	case reflect.Map:
 		return ConvertMap(env, term, value)
@@ -76,10 +76,24 @@ func Convert(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
 			val.Elem().Set(reflect.ValueOf(l))
 			return nil
 		}
+
+		if s, ok := getAtom(env, term); ok {
+			switch s {
+			case "true":
+				val.Elem().Set(reflect.ValueOf(true))
+			case "false":
+				val.Elem().Set(reflect.ValueOf(false))
+			default:
+				val.Elem().Set(reflect.ValueOf(s))
+			}
+			return nil
+		}
+
 		if s, ok := getString(env, term); ok {
 			val.Elem().Set(reflect.ValueOf(s))
 			return nil
 		}
+
 		var obj interface{}
 		if err := ConvertSlice(env, term, &obj); err == nil {
 			val.Elem().Set(reflect.ValueOf(obj))
@@ -196,7 +210,35 @@ func ConvertMap(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error 
 		return nil
 	}
 
-	panic("TODO")
+	if C.enif_is_list(env, term) != 0 {
+		var head C.ERL_NIF_TERM
+		for C.enif_get_list_cell(env, term, &head, &term) != 0 {
+			var (
+				tuple   = head
+				atomLen C.unsigned
+				arity   C.int
+				array   *C.ERL_NIF_TERM
+			)
+			if C.enif_get_atom_length(env, head, &atomLen, C.ERL_NIF_LATIN1) != 0 {
+				tuple = C.enif_make_tuple2(env, tuple, MakeAtom(env, "true"))
+			}
+			if C.enif_get_tuple(env, tuple, &arity, &array) != 0 && arity == 2 {
+				newKey := reflect.New(mp.Type().Key())
+				newValue := reflect.New(mp.Type().Elem())
+				if err := Convert(env, *array, newKey.Interface()); err != nil {
+					return err
+				}
+				if err := Convert(env, *(*C.ERL_NIF_TERM)(unsafe.Pointer(uintptr(unsafe.Pointer(array)) + 8)), newValue.Interface()); err != nil {
+					return err
+				}
+				mp.SetMapIndex(newKey.Elem(), newValue.Elem())
+			}
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("Cannot translate %#q - expected a map / proplist", SprintTerm(env, term))
 }
 
 func ConvertStruct(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
@@ -328,13 +370,18 @@ func getString(env *C.ErlNifEnv, term C.ERL_NIF_TERM) (string, bool) {
 		}
 	}
 
-	if C.enif_get_atom_length(env, term, &length, C.ERL_NIF_LATIN1) != 0 {
-		buf := C.malloc(C.size_t(length + 1))
-		defer C.free(buf)
-		if C.enif_get_atom(env, term, (*C.char)(buf), length+1, C.ERL_NIF_LATIN1) != 0 {
-			return C.GoString((*C.char)(buf)), true
-		}
-	}
+	return getAtom(env, term)
+}
 
-	return "", false
+func getAtom(env *C.ErlNifEnv, term C.ERL_NIF_TERM) (string, bool) {
+	var length C.unsigned
+	if C.enif_get_atom_length(env, term, &length, C.ERL_NIF_LATIN1) == 0 {
+		return "", false
+	}
+	buf := C.malloc(C.size_t(length + 1))
+	defer C.free(buf)
+	if C.enif_get_atom(env, term, (*C.char)(buf), length+1, C.ERL_NIF_LATIN1) == 0 {
+		return "", false
+	}
+	return C.GoString((*C.char)(buf)), true
 }

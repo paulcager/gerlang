@@ -18,12 +18,13 @@ func TestBasic(i int, i32 int32, ui uint64, b bool, f float64, by byte, s string
 	return fmt.Sprint(i, i32, ui, b, f, by, " ", s, " ", bs)
 }
 
-func TestStruct(s Struct) string {
-	return fmt.Sprintf("%v", s)
+func TestStruct(s Struct) *Struct {
+	return &s
 }
 
-func TestMap(m map[string]interface{}) string {
-	return fmt.Sprintf("%v", m)
+func TestMap(m map[string]interface{}) interface{} {
+	m["new"] = 22
+	return m
 }
 
 func TestReturnMultiple(returnError bool) (Struct, string, error) {
