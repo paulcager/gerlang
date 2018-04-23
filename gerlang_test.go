@@ -155,3 +155,14 @@ func TestReturnMultiple(t *testing.T) {
 	require.NoError(t, err, "Command output: %s", b)
 	assert.Equal(t, `{error,"returnedError"}`, string(b))
 }
+
+func TestReturnTime(t *testing.T) {
+	tmp, err := generateTest()
+	require.NoError(t, err)
+	defer os.RemoveAll(tmp)
+	fmt.Println(tmp)
+
+	b, err := runErl(tmp, `ergo:testing_testReturnTime()`)
+	require.NoError(t, err, "Command output: %s", b)
+	assert.Equal(t, `{error,"returnedError"}`, string(b))
+}

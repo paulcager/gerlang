@@ -61,15 +61,20 @@ func (f *FuncDecl) PrintErl(w io.Writer) {
 			ptr, ok = t.(*types.Pointer)
 		}
 
-		name = GoToErl(f.pkg.Pkg.Name(), t.(*types.Named).Obj().Name()+"_"+name)
+		name = GoToErl(f.pkg.Pkg.Name(), t.(*types.Named).Obj().Name()+"_"+f.name)
 	}
 
 	fmt.Fprintf(w, "%s(", name)
 
-	for i, v := range f.params {
+	params := f.params
+	if f.receiver != nil {
+		params = append([]*types.Var{f.receiver}, params...)
+	}
+
+	for i, v := range params {
 		paramName := "_" + v.Name()
 		fmt.Fprint(w, paramName)
-		if i < len(f.params)-1 {
+		if i < len(params)-1 {
 			fmt.Fprint(w, ", ")
 		}
 	}
@@ -194,6 +199,7 @@ func main() {
 				}
 				decl := createDecl(conf.Fset.Position(obj.Pos()), name, pkg, t)
 				decls = append(decls, decl)
+
 			case *types.TypeName:
 				t := obj.Type().(*types.Named)
 				if verbose {
@@ -206,24 +212,6 @@ func main() {
 						decls = append(decls, decl)
 					}
 				}
-			//case *types.Named:
-			//	fmt.Printf("Name %s is a %T\n", name, obj)
-			//	mset := types.NewMethodSet(t)
-			//	for i := 0; i < mset.Len(); i++ {
-			//		meth := mset.At(i).Obj().(*types.Func)
-			//		if !meth.Exported() {
-			//			continue
-			//		}
-			//		fmt.Println(name, meth.Name(), meth.Type(), meth.FullName())
-			//		decl := &FuncDecl{
-			//			position:  conf.Fset.Position(obj.Pos()).String(),
-			//			name:      meth.Name(),
-			//			pkg:       pkg,
-			//			Signature: meth.Type().(*types.Signature),
-			//		}
-			//		decls = append(decls, decl)
-			//		_ = decl
-			//	}
 
 			default:
 				// For now don't process any other definition (such as a var).
@@ -358,10 +346,14 @@ func generateC(decls []*FuncDecl) {
 	}
 
 	fmt.Fprintf(out, "\nstatic ErlNifFunc nif_funcs[] = {\n")
+
+	// TODO - this is very crappy.
 	for _, decl := range decls {
 		recv := decl.receiver
 		glueName := GoToGlue(decl.pkg.Pkg.Name(), decl.name)
+		numParams := len(decl.params)
 		if recv != nil {
+			numParams++
 			t := recv.Type()
 			ptr, ok := t.(*types.Pointer)
 			for ok {
@@ -380,10 +372,10 @@ func generateC(decls []*FuncDecl) {
 				ptr, ok = t.(*types.Pointer)
 			}
 
-			erlName = GoToErl(decl.pkg.Pkg.Name(), t.(*types.Named).Obj().Name()+"_"+erlName)
+			erlName = GoToErl(decl.pkg.Pkg.Name(), t.(*types.Named).Obj().Name()+"_"+decl.name)
 		}
 
-		fmt.Fprintf(out, "\t{\"%s\", %d, %s},\n", erlName, len(decl.params), glueName)
+		fmt.Fprintf(out, "\t{\"%s\", %d, %s},\n", erlName, numParams, glueName)
 	}
 	fmt.Fprintf(out, "};\n\nERL_NIF_INIT(ergo, nif_funcs, NULL, NULL, NULL, NULL);\n")
 }

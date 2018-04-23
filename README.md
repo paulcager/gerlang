@@ -13,8 +13,10 @@ translate Erlang terms into Golang data structures, and then use
 
 For many projects this overhead is too big, and most developers would just re-implement the
 Golang code in Erlang. The aim of this project is to make the process simple enough that calling
-Go from Erlang is easy.
+Go from Erlang is easy. You don't need to know about NIFs or CGO.
 
+
+## Quick Start
 
 ## How It Will Work
 
@@ -23,8 +25,20 @@ Go from Erlang is easy.
     from Erlang:
     *   An Erlang source module containing function definitions for each exported
         function and variable in the package. 
-    *   A NIF to translate between Erlang terms and Golang data structures. 
-    *   A shared object containing the compiled Golang packages, plus code to interact with the NIF. 
+    *   A shared object (DLL or .so) containing the compiled Golang packages,
+        plus code that translates between Erlang Terms and Go data structures, and handles
+        calling conventions between them. 
+
+
+## The Elephants In The Room
+
+There are times when erlang and Go don't play nicely together, in particular regarding unexported fields and pointers.
+
+### Unexported Fields
+
+
+
+### Pointers
 
 
 ## What Didn't Work

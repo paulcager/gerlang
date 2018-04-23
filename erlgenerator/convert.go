@@ -41,7 +41,7 @@ func Convert(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
 			return fmt.Errorf("Cannot translate %#q - expected an int", SprintTerm(env, term))
 		}
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if l, ok := getLong(env, term); ok {
+		if l, ok := getULong(env, term); ok {
 			val.Elem().SetUint(uint64(l))
 		} else {
 			return fmt.Errorf("Cannot translate %#q - expected a uint", SprintTerm(env, term))
@@ -245,6 +245,7 @@ func ConvertMap(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error 
 }
 
 func ConvertStruct(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
+	//fmt.Printf("ConvertStruct %s into %T [%+v]\n", SprintTerm(env, term), value, value)
 	v := reflect.ValueOf(value)
 	// Accept a Map<FieldName>FieldValue; a tuple; or a list
 	var iter C.ErlNifMapIterator
@@ -327,6 +328,12 @@ func getLong(env *C.ErlNifEnv, term C.ERL_NIF_TERM) (int64, bool) {
 	var cl C.long
 	ok := C.enif_get_int64(env, term, &cl) != 0
 	return int64(cl), ok
+}
+
+func getULong(env *C.ErlNifEnv, term C.ERL_NIF_TERM) (uint64, bool) {
+	var cl C.ulong
+	ok := C.enif_get_uint64(env, term, &cl) != 0
+	return uint64(cl), ok
 }
 
 func getDouble(env *C.ErlNifEnv, term C.ERL_NIF_TERM) (float64, bool) {

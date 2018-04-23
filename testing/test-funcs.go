@@ -3,6 +3,7 @@ package testing
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 type Struct struct {
@@ -33,4 +34,8 @@ func TestReturnMultiple(returnError bool) (Struct, string, error) {
 	}
 
 	return Struct{S: "str", I64: 123, I: 456, Sub: struct{ B []byte }{B: []byte{4, 5}}}, "ok", nil
+}
+
+func TestReturnTime() time.Time {
+	return time.Now()
 }
