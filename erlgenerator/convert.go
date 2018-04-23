@@ -23,14 +23,12 @@ import (
 import "C"
 
 func Convert(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
-	//fmt.Printf("Convert %s into %T [%+v]\n", SprintTerm(env, term), value, value)
-	if _, ok := value.(reflect.Value); ok {
-		panic("Probable coding error")
-	}
-	val := reflect.ValueOf(value)
-	if !val.Elem().CanSet() {
-		return fmt.Errorf("Cannot translate %v because %v is not settable", term, val)
-	}
+	return convert(env, term, reflect.ValueOf(value))
+}
+
+func convert(env *C.ErlNifEnv, term C.ERL_NIF_TERM, val reflect.Value) error {
+	//fmt.Printf("Convert %s into %v [%+v]\n", SprintTerm(env, term), val.Type(), val)
+	//defer fmt.Printf("Converted to %v\n", val)
 
 	kind := val.Elem().Kind()
 	switch kind {
@@ -65,13 +63,14 @@ func Convert(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
 			return fmt.Errorf("Cannot translate %#q - expected a bool", SprintTerm(env, term))
 		}
 	case reflect.Map:
-		return ConvertMap(env, term, value)
+		return ConvertMap(env, term, val)
 	case reflect.Array, reflect.Slice:
-		return ConvertSlice(env, term, value)
+		return ConvertSlice(env, term, val)
 	case reflect.Ptr:
-		return Convert(env, term, val.Elem().Interface())
+		fmt.Println("Converting a pointer:", val, SprintTerm(env, term))
+		return convert(env, term, val.Elem())
 	case reflect.Struct:
-		return ConvertStruct(env, term, value)
+		return ConvertStruct(env, term, val)
 	case reflect.Interface:
 		// TODO - but only interface{}, not io.Reader. Prob best checked near start
 		// Can store anything, so try most restrictive first.
@@ -98,58 +97,59 @@ func Convert(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
 		}
 
 		var obj interface{}
-		if err := ConvertSlice(env, term, &obj); err == nil {
-			val.Elem().Set(reflect.ValueOf(obj))
+		objPtr := reflect.ValueOf(&obj)
+		if err := ConvertSlice(env, term, objPtr); err == nil {
+			val.Elem().Set(objPtr)
 			return nil
 		}
 
 		switch {
 		case C.enif_is_list(env, term) != 0, C.enif_is_tuple(env, term) != 0:
 			var slice []interface{}
-			err := Convert(env, term, &slice)
+			err := convert(env, term, reflect.ValueOf(&slice))
 			if err == nil {
 				val.Elem().Set(reflect.ValueOf(slice))
 			}
 			return err
 		}
 
-		panic("TODO - " + fmt.Sprintf("kind=%v, type=%T, term=%s", kind, value, term))
+		panic("TODO - " + fmt.Sprintf("kind=%v, type=%T, term=%s", kind, val.Type(), term))
 		// TODO - And all the others - Channel, Func, ... ... ...
 	default:
-		fmt.Printf("Unexpected kind %q, %v", kind, val)
-		panic("TODO - " + fmt.Sprintf("kind=%v, type=%T, term=%s", kind, value, term))
+		fmt.Printf("Unexpected kind %q, %v\n", kind, val)
+		panic(fmt.Sprintf("TODO kind=%v, type=%T, term=%s", kind, val.Type(), SprintTerm(env, term)))
 	}
 	return nil
 }
 
-func ConvertSlice(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
+func ConvertSlice(env *C.ErlNifEnv, term C.ERL_NIF_TERM, val reflect.Value) error {
+	if val.Elem().Type().Kind() != reflect.Slice {
+		return fmt.Errorf("Not a slice: %s", val.Elem().Type().String())
+	}
+
 	// Special case when expecting []byte: allow binaries.
-	if b, ok := value.(*[]byte); ok {
+	if val.Elem().Type().Elem().Kind() == reflect.Uint8 {
 		var bin C.ErlNifBinary
 		if C.enif_inspect_binary(env, term, &bin) != 0 {
 			size := C.int(bin.size)
 			data := C.GoBytes(unsafe.Pointer(bin.data), size)
-			*b = data
+			val.Elem().Set(reflect.ValueOf(data))
 			return nil
 		}
 	}
 
-	v := reflect.ValueOf(value)
-	if v.Elem().Type().Kind() != reflect.Slice {
-		return fmt.Errorf("Not a slice: %s", v.Elem().Type().String())
-	}
-	//fmt.Printf("value is type %T, value %v, v is %v\n", value, value, v.Type())
+	//fmt.Printf("value is type %T, value %val, val is %val\n", value, value, val.Type())
 	var length C.unsigned
 	if C.enif_get_list_length(env, term, &length) != 0 {
 		var head, tail C.ERL_NIF_TERM
 		// TODO - don't do for array.
-		slice := reflect.MakeSlice(v.Elem().Type(), int(length), int(length))
-		v.Elem().Set(slice)
+		slice := reflect.MakeSlice(val.Elem().Type(), int(length), int(length))
+		val.Elem().Set(slice)
 		i := 0
 		head = term
 		for C.enif_get_list_cell(env, head, &head, &tail) != 0 {
 			var item interface{}
-			err := Convert(env, head, &item)
+			err := convert(env, head, reflect.ValueOf(&item))
 			if err != nil {
 				return err
 			}
@@ -165,11 +165,11 @@ func ConvertSlice(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) erro
 	var array *C.ERL_NIF_TERM
 	if C.enif_get_tuple(env, term, &arity, &array) != 0 {
 		// TODO - don't do for array.
-		slice := reflect.MakeSlice(v.Elem().Type(), int(arity), int(arity))
-		v.Elem().Set(slice)
+		slice := reflect.MakeSlice(val.Elem().Type(), int(arity), int(arity))
+		val.Elem().Set(slice)
 		for i := 0; i < int(arity); i++ {
 			var item interface{}
-			err := Convert(env, *array, &item)
+			err := convert(env, *array, reflect.ValueOf(&item))
 			if err != nil {
 				return err
 			}
@@ -183,13 +183,12 @@ func ConvertSlice(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) erro
 	return fmt.Errorf("Cannot translate (%s) - expected a slice/array", SprintTerm(env, term))
 }
 
-func ConvertMap(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
+func ConvertMap(env *C.ErlNifEnv, term C.ERL_NIF_TERM, val reflect.Value) error {
 	// Can be represented as either a map (http://erlang.org/doc/man/maps.html),
 	// or as a proplist (http://erlang.org/doc/man/proplists.html).
 
-	v := reflect.ValueOf(value)
-	mp := reflect.MakeMap(v.Elem().Type())
-	v.Elem().Set(mp)
+	mp := reflect.MakeMap(val.Elem().Type())
+	val.Elem().Set(mp)
 
 	var iter C.ErlNifMapIterator
 	if C.enif_map_iterator_create(env, term, &iter, C.ERL_NIF_MAP_ITERATOR_FIRST) != 0 {
@@ -200,10 +199,10 @@ func ConvertMap(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error 
 		for C.enif_map_iterator_get_pair(env, &iter, &kTerm, &vTerm) != 0 {
 			newKey := reflect.New(mp.Type().Key())
 			newValue := reflect.New(mp.Type().Elem())
-			if err := Convert(env, kTerm, newKey.Interface()); err != nil {
+			if err := convert(env, kTerm, newKey); err != nil {
 				return err
 			}
-			if err := Convert(env, vTerm, newValue.Interface()); err != nil {
+			if err := convert(env, vTerm, newValue); err != nil {
 				return err
 			}
 			mp.SetMapIndex(newKey.Elem(), newValue.Elem())
@@ -228,10 +227,10 @@ func ConvertMap(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error 
 			if C.enif_get_tuple(env, tuple, &arity, &array) != 0 && arity == 2 {
 				newKey := reflect.New(mp.Type().Key())
 				newValue := reflect.New(mp.Type().Elem())
-				if err := Convert(env, *array, newKey.Interface()); err != nil {
+				if err := convert(env, *array, newKey); err != nil {
 					return err
 				}
-				if err := Convert(env, *(*C.ERL_NIF_TERM)(unsafe.Pointer(uintptr(unsafe.Pointer(array)) + 8)), newValue.Interface()); err != nil {
+				if err := convert(env, *(*C.ERL_NIF_TERM)(unsafe.Pointer(uintptr(unsafe.Pointer(array)) + 8)), newValue); err != nil {
 					return err
 				}
 				mp.SetMapIndex(newKey.Elem(), newValue.Elem())
@@ -244,9 +243,8 @@ func ConvertMap(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error 
 	return fmt.Errorf("Cannot translate %#q - expected a map / proplist", SprintTerm(env, term))
 }
 
-func ConvertStruct(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) error {
-	//fmt.Printf("ConvertStruct %s into %T [%+v]\n", SprintTerm(env, term), value, value)
-	v := reflect.ValueOf(value)
+func ConvertStruct(env *C.ErlNifEnv, term C.ERL_NIF_TERM, val reflect.Value) error {
+	//fmt.Printf("ConvertStruct %s into %T [%+val]\n", SprintTerm(env, term), value, value)
 	// Accept a Map<FieldName>FieldValue; a tuple; or a list
 	var iter C.ErlNifMapIterator
 	if C.enif_map_iterator_create(env, term, &iter, C.ERL_NIF_MAP_ITERATOR_FIRST) != 0 {
@@ -257,15 +255,15 @@ func ConvertStruct(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) err
 			if err := Convert(env, kTerm, &fieldName); err != nil {
 				return err
 			}
-			field := v.Elem().FieldByName(fieldName)
-			//fmt.Printf("field: %T %v\n", field, field.Interface())
+			field := val.Elem().FieldByName(fieldName)
+			//fmt.Printf("field: %T %val\n", field, field.Interface())
 			if !field.IsValid() {
 				// Could just ignore, but more likely it is an error.
 				return fmt.Errorf("No field named %q", fieldName)
 			}
 			fieldValue := reflect.New(field.Type())
-			//fmt.Printf("fieldValue: %T %v\n", fieldValue.Interface(), fieldValue.Interface())
-			if err := Convert(env, vTerm, fieldValue.Interface()); err != nil {
+			//fmt.Printf("fieldValue: %T %val\n", fieldValue.Interface(), fieldValue.Interface())
+			if err := convert(env, vTerm, fieldValue); err != nil {
 				return err
 			}
 			field.Set(fieldValue.Elem())
@@ -298,11 +296,13 @@ func ConvertStruct(env *C.ErlNifEnv, term C.ERL_NIF_TERM, value interface{}) err
 	}
 
 	for i := range list {
-		field := reflect.New(v.Elem().Field(i).Type())
-		if err := Convert(env, list[i], field.Interface()); err != nil {
+		field := reflect.New(val.Elem().Field(i).Type())
+		if err := convert(env, list[i], field); err != nil {
 			return err
 		}
-		v.Elem().Field(i).Set(field.Elem())
+		ptr := reflect.NewAt(val.Elem().Field(i).Type(), unsafe.Pointer(val.Elem().Field(i).Addr().Pointer()))
+		ptr.Elem().Set(field.Elem())
+		//val.Elem().Field(i).Set(field.Elem())
 	}
 
 	return nil

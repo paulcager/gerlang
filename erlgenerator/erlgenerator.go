@@ -172,6 +172,14 @@ func isErrorType(v *types.Var) bool {
 }
 
 func main() {
+	//t := time.Now()
+	//tv := reflect.ValueOf(&t)
+	//fmt.Println(tv.Elem().Field(0).Uint())
+	//fmt.Println(tv.Elem().Field(0).CanSet())
+	//fmt.Println(tv.Elem().Field(0).Addr())
+	//tv.Elem().Field(0).SetUint(99)
+	//os.Exit(2)
+
 	conf.FromArgs(pkgNames, false)
 	prog, err := conf.Load()
 	if err != nil {

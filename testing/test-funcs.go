@@ -36,6 +36,10 @@ func TestReturnMultiple(returnError bool) (Struct, string, error) {
 	return Struct{S: "str", I64: 123, I: 456, Sub: struct{ B []byte }{B: []byte{4, 5}}}, "ok", nil
 }
 
+func TestInterface(i interface{}) string {
+	return fmt.Sprint(i)
+}
+
 func TestReturnTime() time.Time {
 	return time.Now()
 }
