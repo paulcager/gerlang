@@ -1,7 +1,6 @@
 package main
 
-const MakeTermStr = `
-package main
+const MakeTermStr = `package main
 
 // #include "erl_nif.h"
 import "C"

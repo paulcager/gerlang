@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"go/token"
 	"go/types"
 	"io"
 	"io/ioutil"
@@ -12,14 +13,17 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"go/token"
-
 	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/imports"
 )
 
-//go:generate bash -c "(echo package main; echo; echo 'const ConvertStr = `'; sed 1s/runtime/main/ ../runtime/convert.go; echo '`') >convert.go"
-//go:generate bash -c "(echo package main; echo; echo 'const MakeTermStr = `'; sed 1s/runtime/main/ ../runtime/maketerm.go; echo '`') >maketerm.go"
+//go:generate bash -c "(echo package main; echo; echo -n 'const ConvertStr =  `'; sed 's/^package runtime/package main/' ../runtime/convert.go; echo '`') >convert.go"
+//go:generate bash -c "(echo package main; echo; echo -n 'const MakeTermStr = `'; sed 's/^package runtime/package main/' ../runtime/maketerm.go; echo '`') >maketerm.go"
+
+// Note to me: go generate -v . ./erlgenerator && go install ./erlgenerator/ ./testing  && go install ./erlgenerator && erlgenerator -out /tmp/out time && (cd /tmp/out; erl -eval 'io:format("Value is <~p>~n", [ergo:time_time_IsZero(ergo:time_now())]), init:stop()' | tee /tmp/pc1)
+
+// Next and TODO
+// * For structs need to generate (e.g.) time_new_time(_wall, _ext, _loc).
 
 var (
 	conf = loader.Config{}
@@ -113,8 +117,10 @@ func (f *FuncDecl) PrintGlue(w io.Writer) {
 		typ := types.TypeString(param.Type(), typeQualifier)
 		fmt.Fprintf(w, "\tvar %s %s\n", param.Name(), typ)
 	}
+	// TODO - ugly code
 	if recv != nil {
 		fmt.Fprintf(w, "\tif __err = Convert(env, *__argv, &%s); __err != nil { return MakeError(env, __err.Error()) }\n", recv.Name())
+		fmt.Fprintf(w, "__argv = (*C.ERL_NIF_TERM)(unsafe.Pointer(8 + uintptr(unsafe.Pointer(__argv))))\n")
 	}
 	for i := range params {
 		param := params[i]
@@ -172,14 +178,6 @@ func isErrorType(v *types.Var) bool {
 }
 
 func main() {
-	//t := time.Now()
-	//tv := reflect.ValueOf(&t)
-	//fmt.Println(tv.Elem().Field(0).Uint())
-	//fmt.Println(tv.Elem().Field(0).CanSet())
-	//fmt.Println(tv.Elem().Field(0).Addr())
-	//tv.Elem().Field(0).SetUint(99)
-	//os.Exit(2)
-
 	conf.FromArgs(pkgNames, false)
 	prog, err := conf.Load()
 	if err != nil {

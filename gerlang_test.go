@@ -1,4 +1,4 @@
-package gerlang
+package main
 
 import (
 	"fmt"
@@ -25,7 +25,7 @@ func generateTest() (string, error) {
 		return "", fmt.Errorf("failed to build: %s\n%s", err, output)
 	}
 
-	output, err = exec.Command(exePath, "-out", tmp, "-verbose", "github.com/paulcager/gerlang/testing").CombinedOutput()
+	output, err = exec.Command(exePath, "-out", tmp, "-verbose", "github.com/paulcager/gerlang/testing", "time").CombinedOutput()
 	if err != nil {
 		os.RemoveAll(tmp)
 		return "", fmt.Errorf("failed to run: %s\n%s", err, output)
@@ -175,5 +175,25 @@ func TestReturnTime(t *testing.T) {
 
 	b, err := runErl(tmp, `ergo:testing_testReturnTime()`)
 	require.NoError(t, err, "Command output: %s", b)
-	assert.Equal(t, `TODO`, string(b))
+	// TODO: this is brittle, as it will fail if the implementation details of time fails. But this whole thing subverts encapsulation.
+	assert.Equal(t, `{123000000,63660708735,nil}`, string(b))
+
+	b, err = runErl(tmp, `ergo:time_time_Clock(ergo:testing_testReturnTime())`)
+	require.NoError(t, err, "Command output: %s", b)
+	assert.Equal(t, `{18,12,15}`, string(b))
+
+	b, err = runErl(tmp, `ergo:time_time_Clock(ergo:time_time_Round(ergo:testing_testReturnTime(), 60 * 1000 * 1000 * 1000))`)
+	require.NoError(t, err, "Command output: %s", b)
+	assert.Equal(t, `{18,12,0}`, string(b))
+}
+
+func TestPointers(t *testing.T) {
+	tmp, err := generateTest()
+	require.NoError(t, err)
+	defer os.RemoveAll(tmp)
+	fmt.Println(tmp)
+
+	b, err := runErl(tmp, `ergo:testing_testStructPtrs({22, 48, 72, {12}})`)
+	require.NoError(t, err, "Command output: %s", b)
+	assert.Equal(t, `"22 48 72 12"`, string(b), "Command output: %#q", b)
 }

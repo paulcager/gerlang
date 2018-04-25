@@ -1,7 +1,6 @@
 package main
 
-const ConvertStr = `
-package main
+const ConvertStr = `package main
 
 import (
 	"fmt"
@@ -67,7 +66,11 @@ func convert(env *C.ErlNifEnv, term C.ERL_NIF_TERM, val reflect.Value) error {
 	case reflect.Array, reflect.Slice:
 		return ConvertSlice(env, term, val)
 	case reflect.Ptr:
-		fmt.Println("Converting a pointer:", val, SprintTerm(env, term))
+		if atom, ok := getAtom(env, term); ok && atom == "nil" {
+			return nil
+		}
+		newVal := reflect.New(val.Type().Elem().Elem())
+		val.Elem().Set(newVal)
 		return convert(env, term, val.Elem())
 	case reflect.Struct:
 		return ConvertStruct(env, term, val)
@@ -244,7 +247,7 @@ func ConvertMap(env *C.ErlNifEnv, term C.ERL_NIF_TERM, val reflect.Value) error 
 }
 
 func ConvertStruct(env *C.ErlNifEnv, term C.ERL_NIF_TERM, val reflect.Value) error {
-	//fmt.Printf("ConvertStruct %s into %T [%+val]\n", SprintTerm(env, term), value, value)
+	//fmt.Printf("ConvertStruct %s into %v [%+v]\n", SprintTerm(env, term), val, val.Type())
 	// Accept a Map<FieldName>FieldValue; a tuple; or a list
 	var iter C.ErlNifMapIterator
 	if C.enif_map_iterator_create(env, term, &iter, C.ERL_NIF_MAP_ITERATOR_FIRST) != 0 {
@@ -291,7 +294,7 @@ func ConvertStruct(env *C.ErlNifEnv, term C.ERL_NIF_TERM, val reflect.Value) err
 				array = (*C.ERL_NIF_TERM)(unsafe.Pointer(uintptr(unsafe.Pointer(array)) + 8))
 			}
 		} else {
-			return fmt.Errorf("Expected map, struct or list to decode into struct")
+			return fmt.Errorf("Expected map, tuple or list to decode into struct. Got %s", SprintTerm(env, term))
 		}
 	}
 

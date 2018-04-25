@@ -41,5 +41,18 @@ func TestInterface(i interface{}) string {
 }
 
 func TestReturnTime() time.Time {
-	return time.Now()
+	return time.Date(2018, 4, 30, 18, 12, 15, 123000000, time.UTC)
+}
+
+type StructPtrs struct {
+	I     *int64
+	i     *int
+	j     **int
+	inner **struct {
+		s1 ***int
+	}
+}
+
+func TestStructPtrs(s StructPtrs) string {
+	return fmt.Sprintf("%v %v %v %v", *s.I, *s.i, **s.j, ***(**(s.inner)).s1)
 }
